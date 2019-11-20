@@ -1,47 +1,84 @@
 clear all
 addpath('..');
-N = 1000; %number of 4x4 matries
-cycles = 10;
+cycles = 1;
+obj = VectorForm();
+Ns = floor(10.^([5:0.5:5])); 
+avg_time_loop = zeros( numel(Ns),1);
+avg_time_vctrz = zeros( numel(Ns),1);
+avg_time_gpuloop = zeros( numel(Ns),1);
+avg_time_gpuvctrz = zeros( numel(Ns),1);
 
-%%% integer
-for i = 1:N
-    m(:,:,i) = randi(2^16, 4, 4); %allocate in different pages
-    v(:,i) = VectorForm.ToVectorForm( m(:,:, i));
-end
+cnt = 1;
+for N = Ns
+    fprintf('calculating N = %d...\n', N);
+    %%% integer
+    for i = 1:N
+        m(:,:,i) = randi(2^16, 4, 4); %allocate in different pages
+        v(:,i) = VectorForm.ToVectorForm( m(:,:, i));
+    end
+    tic
+    gpuM = gpuArray(m);
+    gpuV = gpuArray(v);
+    disp('Elapsed time in sending data to GPU:');
+    toc
+    
+    time_arr = zeros(cycles,1);
+    if( N > 10^4 )
+        avg_time_loop(cnt) = NaN;
+    else
+        f = @() inv_loop(m,N);
+        for j = 1:cycles
+            time_arr(j) = timeit(f);
+        end
+        avg_time_loop(cnt) = mean(time_arr);
+    end
+    
+    f = @() obj.Inv4(v);
+    for j = 1:cycles
+        time_arr(j) = timeit(f);
+    end
+    avg_time_vctrz(cnt) = mean(time_arr);
+    
+    % loop method on gpu skip if N > 10^3
+    if( N > 10^2 ) 
+        avg_time_gpuloop(cnt) = NaN;
+    else
+        f = @() inv_loop(gpuM,N);
+        for j = 1:cycles
+            time_arr(j) = gputimeit(f);
+        end
+        avg_time_gpuloop(cnt) = mean(time_arr);
+    end
+    
+    % vectorized method on gpu
+    f = @() obj.Inv4(gpuV);
+    for j = 1:cycles
+        time_arr(j) = gputimeit(f);
+    end
+    avg_time_gpuvctrz(cnt) = mean(time_arr);
 
-tic
-for j = 1:cycles
-for i = 1:N
-    m2(:,:,i) = m(:,:,i)*m(:,:,i);
+    cnt = cnt+1;
 end
-end
-toc
-
-tic
-for j = 1:cycles
-v2 = VectorForm.Mul4(v, v);
-end
-toc
 %%
-
-gpuM = gpuArray(m);
-gpuM2 = gpuArray(m2);
-f=@() g(m2,m,cycles,N);
-gputimeit(f)
-
-%%
-
-m2(:,:,1);
-v2(:,1);
-
-gpuV = gpuArray(v);
-gpuV2 = gpuArray(v);
-tic
-for gpuj = 1:cycles
-gpuV2 = VectorForm.Mul4(gpuV, gpuV);
-end
-toc
+figure(1)
+subplot(121);
+loglog(Ns, avg_time_loop, '-s', Ns, avg_time_vctrz, '-s'); hold on;
+set(gca, 'ColorOrderIndex',1);
+loglog(Ns, avg_time_gpuloop, '--s', Ns, avg_time_gpuvctrz, '--s');
+hold off;
+ylabel('Elapsed time [s]');
+xlabel('Number of Matrices');
+legend('Loop-calculation on host', 'Vectorized-calculation on host',...
+    'Loop-calculation on GPU', 'Vectorized-calculation on GPU', 'location', 'southeast');
 
 
-m2(:,:,1);
-v2(:,1);
+subplot(122);
+loglog(Ns, Ns'./avg_time_loop, '-s',  Ns, Ns'./avg_time_vctrz, '-s'); hold on;
+set(gca, 'ColorOrderIndex',1);
+loglog(Ns, Ns'./avg_time_gpuloop, '--s',  Ns, Ns'./avg_time_gpuvctrz, '--s');
+hold off
+ylabel('Calculation speed [Matrices/s]');
+clear m v gpuM gpuV
+
+%save('4x4Inverse-integer.mat');
+
